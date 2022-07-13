@@ -14,6 +14,6 @@
 
 .PHONY: all snapshot-controller csi-snapshotter snapshot-validation-webhook clean test
 
-CMDS=volumegroup-controller volumegroup-sidecar
+CMDS=volumegroup-sidecar
 all: build
 include release-tools/build.make

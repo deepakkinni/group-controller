@@ -20,6 +20,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/container-storage-interface/spec/lib/go/csi"
+	volumegroup_sidecar_controller "github.com/deepakkinni/volumegroup-controller/pkg/volumegroup-sidecar-controller"
+	"k8s.io/client-go/util/workqueue"
 	"net/http"
 	"os"
 	"os/signal"
@@ -173,7 +176,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// TODO: Re-enable this
 	supportsVolumeGroup, err := supportsVolumeGroup(ctx, csiConn)
 	if err != nil {
 		klog.Errorf("error determining if driver supports volumegroup operations: %v", err)
@@ -186,12 +188,24 @@ func main() {
 
 	klog.V(2).Infof("Start NewVolumeGroupSideCarController")
 
+	ctrl := volumegroup_sidecar_controller.NewCSIVolumeGroupSideCarController(
+		volumeGroupClient, kubeClient, driverName, factory.Volumegroup().V1alpha1().VolumeGroups(),
+		factory.Volumegroup().V1alpha1().VolumeGroupContents(),
+		factory.Volumegroup().V1alpha1().VolumeGroupClasses(),
+		coreFactory.Core().V1().PersistentVolumeClaims(),
+		*resyncPeriod,
+		workqueue.NewItemExponentialFailureRateLimiter(*retryIntervalStart, *retryIntervalMax),
+		workqueue.NewItemExponentialFailureRateLimiter(*retryIntervalStart, *retryIntervalMax),
+		workqueue.NewItemExponentialFailureRateLimiter(*retryIntervalStart, *retryIntervalMax),
+		workqueue.NewItemExponentialFailureRateLimiter(*retryIntervalStart, *retryIntervalMax),
+	)
+
 	run := func(context.Context) {
 		// run...
 		stopCh := make(chan struct{})
 		factory.Start(stopCh)
 		coreFactory.Start(stopCh)
-		// go ctrl.Run(*threads, stopCh)
+		go ctrl.Run(*threads, stopCh)
 
 		// ...until SIGINT
 		c := make(chan os.Signal, 1)
@@ -236,5 +250,15 @@ func buildConfig(kubeconfig string) (*rest.Config, error) {
 }
 
 func supportsVolumeGroup(ctx context.Context, conn *grpc.ClientConn) (bool, error) {
+	capabilities, err := csirpc.GetControllerCapabilities(ctx, conn)
+	if err != nil {
+		return false, err
+	}
+	// TODO: Actually return the capabilities
+	supported := capabilities[csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME_GROUP] &&
+		capabilities[csi.ControllerServiceCapability_RPC_GET_VOLUME_GROUP] &&
+		capabilities[csi.ControllerServiceCapability_RPC_VOLUME_GROUP_ADD_REMOVE_EXISTING_VOLUME] &&
+		capabilities[csi.ControllerServiceCapability_RPC_LIST_VOLUME_GROUPS]
+	klog.Infof("VolumeGroup Related capabilities exposed: %+v", supported)
 	return true, nil
 }
