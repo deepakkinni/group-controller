@@ -20,8 +20,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/scheme"
 	"net"
 	"net/http"
 	"os"
@@ -29,9 +27,12 @@ import (
 	"sync"
 	"time"
 
-	clientset "github.com/deepakkinni/volumegroup-controller/client/v1/clientset/versioned"
-	volumegroupcheme "github.com/deepakkinni/volumegroup-controller/client/v1/clientset/versioned/scheme"
-	informers "github.com/deepakkinni/volumegroup-controller/client/v1/informers/externalversions"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/scheme"
+
+	clientset "github.com/deepakkinni/volumegroup-controller/pkg/client/clientset/versioned"
+	volumegroupcheme "github.com/deepakkinni/volumegroup-controller/pkg/client/clientset/versioned/scheme"
+	informers "github.com/deepakkinni/volumegroup-controller/pkg/client/informers/externalversions"
 
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -152,7 +153,6 @@ func main() {
 
 	klog.V(2).Infof("Start NewVolumeGroupController with kubeconfig [%s] resyncPeriod [%+v]", *kubeconfig, *resyncPeriod)
 	// TODO: Statrt the controller
-
 
 	run := func(context.Context) {
 		// run...

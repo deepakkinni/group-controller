@@ -20,13 +20,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/kubernetes-csi/csi-lib-utils/connection"
-	"github.com/kubernetes-csi/csi-lib-utils/metrics"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"time"
+
+	"github.com/kubernetes-csi/csi-lib-utils/connection"
+	"github.com/kubernetes-csi/csi-lib-utils/metrics"
 
 	"google.golang.org/grpc"
 
@@ -39,9 +40,9 @@ import (
 	"github.com/kubernetes-csi/csi-lib-utils/leaderelection"
 	csirpc "github.com/kubernetes-csi/csi-lib-utils/rpc"
 
-	clientset "github.com/deepakkinni/volumegroup-controller/client/v1/clientset/versioned"
-	volumegroupcheme "github.com/deepakkinni/volumegroup-controller/client/v1/clientset/versioned/scheme"
-	informers "github.com/deepakkinni/volumegroup-controller/client/v1/informers/externalversions"
+	clientset "github.com/deepakkinni/volumegroup-controller/pkg/client/clientset/versioned"
+	volumegroupcheme "github.com/deepakkinni/volumegroup-controller/pkg/client/clientset/versioned/scheme"
+	informers "github.com/deepakkinni/volumegroup-controller/pkg/client/informers/externalversions"
 
 	coreinformers "k8s.io/client-go/informers"
 )
@@ -173,7 +174,7 @@ func main() {
 	}
 
 	// TODO: Re-enable this
-	/*supportsVolumeGroup, err := supportsVolumeGroup(ctx, csiConn)
+	supportsVolumeGroup, err := supportsVolumeGroup(ctx, csiConn)
 	if err != nil {
 		klog.Errorf("error determining if driver supports volumegroup operations: %v", err)
 		os.Exit(1)
@@ -181,7 +182,7 @@ func main() {
 	if !supportsVolumeGroup {
 		klog.Errorf("CSI driver %s does not support VolumeGroup", driverName)
 		os.Exit(1)
-	}*/
+	}
 
 	klog.V(2).Infof("Start NewVolumeGroupSideCarController")
 
