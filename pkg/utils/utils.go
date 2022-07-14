@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"github.com/deepakkinni/volumegroup-controller/pkg/apis/volumegroup/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
@@ -64,4 +65,38 @@ func StoreObjectUpdate(store cache.Store, obj interface{}, className string) (bo
 		return false, fmt.Errorf("error updating %s %q in controller cache: %v", className, objName, err)
 	}
 	return true, nil
+}
+
+func VolumeGroupKey(vg *v1alpha1.VolumeGroup) string {
+	return fmt.Sprintf("%s/%s", vg.Namespace, vg.Name)
+}
+
+func GetVolumeGroupStatusForLogging(vg *v1alpha1.VolumeGroup) string {
+	volumeGroupContentName := ""
+	if vg.Status != nil && vg.Spec.VolumeGroupContentName != nil {
+		volumeGroupContentName = *vg.Spec.VolumeGroupContentName
+	}
+	ready := false
+	if vg.Status != nil && vg.Status.Ready != nil {
+		ready = *vg.Status.Ready
+	}
+	return fmt.Sprintf("bound to: %q, Completed: %v", volumeGroupContentName, ready)
+}
+
+func GetDynamicVolumeGroupContentNameForVolumeGroup(vg *v1alpha1.VolumeGroup) string {
+	return "volumegroupcontent-" + string(vg.UID)
+}
+
+func IsVolumeGroupReady(vg *v1alpha1.VolumeGroup) bool {
+	if vg.Status == nil || vg.Status.Ready == nil || *vg.Status.Ready == false {
+		return false
+	}
+	return true
+}
+
+func IsBoundVolumeGroupContentNameSet(vg *v1alpha1.VolumeGroup) bool {
+	if vg.Status == nil || vg.Spec.VolumeGroupContentName == nil || *vg.Spec.VolumeGroupContentName == "" {
+		return false
+	}
+	return true
 }

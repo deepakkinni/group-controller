@@ -1,0 +1,6 @@
+apiVersion: volumegroup.storage.k8s.io/v1alpha1
+kind: VolumeGroup
+metadata:
+  name: testvgname 
+spec:
+  volumeGroupClassName: test-volume-group-class

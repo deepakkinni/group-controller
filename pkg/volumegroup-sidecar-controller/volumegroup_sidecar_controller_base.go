@@ -3,6 +3,7 @@ package volumegroup_sidecar_controller
 import (
 	v1alpha13 "github.com/deepakkinni/volumegroup-controller/pkg/apis/volumegroup/v1alpha1"
 	v13 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"time"
 
 	clientset "github.com/deepakkinni/volumegroup-controller/pkg/client/clientset/versioned"
@@ -383,12 +384,41 @@ func (ctrl *csiVolumeGroupSideCarController) syncVolumeGroupByKey(key string) er
 		klog.Errorf("error getting namespace & name of volumegroup %q to get volumegroup from informer: %v", key, err)
 		return nil
 	}
+	volumeGroup, err := ctrl.volumeGroupLister.VolumeGroups(namespace).Get(name)
+	if err == nil {
+		// TODO: add VolumeGroupClass
+		return ctrl.syncVolumeGroup(volumeGroup)
+	}
+	if err != nil && !errors.IsNotFound(err) {
+		klog.V(2).Infof("error getting volumegroup %q from informer: %v", key, err)
+		return err
+	}
+	// The volumegroup is not in informer cache, the event must have been "delete"
+	vgObj, found, err := ctrl.volumeGroupStore.GetByKey(key)
+	if err != nil {
+		klog.V(2).Infof("error getting volumegroup %q from cache: %v", key, err)
+		return nil
+	}
+	if !found {
+		// The controller has already processed the delete event and
+		// deleted the volumegroup from its cache
+		klog.V(2).Infof("deletion of volumegroup %q was already processed", key)
+		return nil
+	}
+	volGroup, ok := vgObj.(*v1alpha13.VolumeGroup)
+	if !ok {
+		klog.Errorf("expected vs, got %+v", vgObj)
+		return nil
+	}
+
+	klog.V(5).Infof("deleting volumegroup %q", key)
+	ctrl.deleteVolumeGroup(volGroup)
 	return nil
 }
 
 // syncVolumeGroupContentByKey processes a VolumeGroupContent request.
 func (ctrl *csiVolumeGroupSideCarController) syncVolumeGroupContentByKey(key string) error {
-	klog.V(5).Infof("syncVolumeGroupByKey[%s]", key)
+	klog.V(5).Infof("syncVolumeGroupContentByKey[%s]", key)
 
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	klog.V(5).Infof("volumeGroupContentWorker: volumegroupcontent namespace [%s] name [%s]", namespace, name)
@@ -396,6 +426,33 @@ func (ctrl *csiVolumeGroupSideCarController) syncVolumeGroupContentByKey(key str
 		klog.Errorf("error getting namespace & name of volumegroupcontent %q to get volumegroupcontent from informer: %v", key, err)
 		return nil
 	}
+	volumeGroupContent, err := ctrl.volumeGroupContentLister.Get(name)
+	if err == nil {
+		return ctrl.syncVolumeGroupContent(volumeGroupContent)
+	}
+	if err != nil && !errors.IsNotFound(err) {
+		klog.V(2).Infof("error getting volumegroupcontent %q from informer: %v", key, err)
+		return err
+	}
+	// The volumegroup is not in informer cache, the event must have been "delete"
+	vgcObj, found, err := ctrl.volumeGroupContentStore.GetByKey(key)
+	if err != nil {
+		klog.V(2).Infof("error getting volumegroupcontent %q from cache: %v", key, err)
+		return nil
+	}
+	if !found {
+		// The controller has already processed the delete event and
+		// deleted the volumegroupcontent from its cache
+		klog.V(2).Infof("deletion of volumegroupcontent %q was already processed", key)
+		return nil
+	}
+	volGroupContent, ok := vgcObj.(*v1alpha13.VolumeGroupContent)
+	if !ok {
+		klog.Errorf("expected vs, got %+v", vgcObj)
+		return nil
+	}
+	klog.Infof("calling deleteVolumeGroupContent..")
+	ctrl.deleteVolumeGroupContent(volGroupContent)
 	return nil
 }
 
@@ -421,6 +478,14 @@ func (ctrl *csiVolumeGroupSideCarController) syncPvcByKey(key string) error {
 	if err != nil {
 		klog.Errorf("error getting namespace & name of pvc %q to get pvc from informer: %v", key, err)
 		return nil
+	}
+	pvc, err := ctrl.pvcLister.PersistentVolumeClaims(namespace).Get(name)
+	if err == nil {
+		return ctrl.syncPersistentVolumeClaim(pvc)
+	}
+	if err != nil && !errors.IsNotFound(err) {
+		klog.V(2).Infof("error getting pvc %q from informer: %v", key, err)
+		return err
 	}
 	return nil
 }

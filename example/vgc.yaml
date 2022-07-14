@@ -1,0 +1,6 @@
+apiVersion: volumegroup.storage.k8s.io/v1alpha1
+kind: VolumeGroupClass
+metadata:
+  name: test-volume-group-class
+supportVolumeGroupSnapshot: false
+driver: csi.vsphere.vmware.com
