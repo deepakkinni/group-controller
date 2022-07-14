@@ -21,6 +21,10 @@ func (ctrl *csiVolumeGroupSideCarController) syncPersistentVolumeClaim(pvc *v1.P
 		klog.Infof("The pvc %s/%s was not in bound phase, ignoring for now", pvc.Namespace, pvc.Name)
 		return nil
 	}
+	if pvc.ObjectMeta.DeletionTimestamp != nil {
+		klog.Infof("the pvc %s/%s is under deletion, skipping", pvc.Namespace, pvc.Name)
+		return nil
+	}
 	if volGroupAnn != "" {
 		klog.Info("found storage.k8s.io/volumegroup annotation on pvc")
 		split := strings.Split(volGroupAnn, "/")
@@ -300,9 +304,11 @@ func (ctrl *csiVolumeGroupSideCarController) createVolumeGroupContent(volumeGrou
 	// TODO: Following are hardcoded, change them
 	volumeGroupDeletionPol := v1alpha1.VolumeGroupContentDelete
 	className := "test-volume-group-class"
+	finalizer := []string{"vgc-finalizer"}
 	volumeGroupContent := &v1alpha1.VolumeGroupContent{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: volmeGroupContentName,
+			Name:       volmeGroupContentName,
+			Finalizers: finalizer,
 		},
 		Spec:       v1alpha1.VolumeGroupContentSpec{
 			VolumeGroupClassName:      &className,
@@ -346,7 +352,7 @@ func (ctrl *csiVolumeGroupSideCarController) deleteVolumeGroupContent(volumeGrou
 	klog.V(4).Infof("volumegroupcontent %q attempting to delete..", volumeGroupContent.Name)
 	klog.V(4).Infof("volumegroupcontent %q , will attempt to delete associated pvc", volumeGroupContent.Name)
 
-	var deletedPvc map[string]string
+	deletedPvc := make(map[string]string)
 	if volumeGroupContent.Status != nil {
 		pvList := volumeGroupContent.Status.PVList
 		for _, pv := range pvList {
@@ -369,6 +375,16 @@ func (ctrl *csiVolumeGroupSideCarController) deleteVolumeGroupContent(volumeGrou
 		}
 	} else {
 		klog.Infof("The volumegroupcontent status is nil : %+v", volumeGroupContent)
+	}
+	// Remove the finalizer
+	volumeGroupContentObj, err := ctrl.clientset.VolumegroupV1alpha1().VolumeGroupContents().Get(context.TODO(), volumeGroupContent.Name, metav1.GetOptions{})
+	if err != nil {
+		klog.Errorf("error get volumegroupcontent %s from api server: %v", volumeGroupContent.Name, err)
+	}
+	volumeGroupContentObj.Finalizers = nil
+	_, err = ctrl.clientset.VolumegroupV1alpha1().VolumeGroupContents().Update(context.TODO(), volumeGroupContentObj, metav1.UpdateOptions{})
+	if err != nil {
+		klog.Errorf("error updating volumegroupcontent %s from api server when removing finalizer: %v", volumeGroupContent.Name, err)
 	}
 	_ = ctrl.volumeGroupContentStore.Delete(volumeGroupContent)
 	klog.V(4).Infof("volumegroupcontent %q attempting to deleted", volumeGroupContent.Name)
