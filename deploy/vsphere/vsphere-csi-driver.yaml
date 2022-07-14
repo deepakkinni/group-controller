@@ -402,7 +402,7 @@ spec:
             - mountPath: /csi
               name: socket-dir
         - name: volumegroup-sidecar
-          image: harbor-repo.vmware.com/dkinni/volumegroup-sidecar:v0.0.12-hackathon
+          image: harbor-repo.vmware.com/dkinni/volumegroup-sidecar:v0.0.17-hackathon
           args:
             - "--v=5"
             - "--kube-api-qps=100"

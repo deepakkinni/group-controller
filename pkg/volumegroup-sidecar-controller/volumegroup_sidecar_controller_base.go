@@ -120,7 +120,7 @@ func NewCSIVolumeGroupSideCarController(
 		cache.ResourceEventHandlerFuncs{
 			AddFunc:    func(obj interface{}) {ctrl.enqueuePvcWork(obj)},
 			UpdateFunc: func(oldObj, newObj interface{}) {ctrl.enqueuePvcWork(newObj)},
-			DeleteFunc: func(obj interface{}) {ctrl.enqueuePvcWork(obj)},
+			DeleteFunc: func(obj interface{}) {},
 		},
 		ctrl.resyncPeriod,
 	)
@@ -386,9 +386,9 @@ func (ctrl *csiVolumeGroupSideCarController) syncVolumeGroupByKey(key string) er
 	}
 	volumeGroup, err := ctrl.volumeGroupLister.VolumeGroups(namespace).Get(name)
 	if err == nil {
-		// TODO: add VolumeGroupClass
 		return ctrl.syncVolumeGroup(volumeGroup)
 	}
+	klog.Infof("syncVolumeGroup was not called %s/%s", namespace, name)
 	if err != nil && !errors.IsNotFound(err) {
 		klog.V(2).Infof("error getting volumegroup %q from informer: %v", key, err)
 		return err

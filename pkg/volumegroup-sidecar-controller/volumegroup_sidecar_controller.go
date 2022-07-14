@@ -50,11 +50,15 @@ func (ctrl *csiVolumeGroupSideCarController) syncPersistentVolumeClaim(pvc *v1.P
 		// update the volume group status
 		volumeGroupClone := volumeGroupObj.DeepCopy()
 		volumeGroupClone.Status.PVCList = pvcList
-		_, err = ctrl.clientset.VolumegroupV1alpha1().VolumeGroups(volumeGroupClone.Namespace).UpdateStatus(context.TODO(), volumeGroupClone, metav1.UpdateOptions{})
+		updatedVg, err := ctrl.clientset.VolumegroupV1alpha1().VolumeGroups(volumeGroupClone.Namespace).UpdateStatus(context.TODO(), volumeGroupClone, metav1.UpdateOptions{})
 		if err != nil {
 			return err
 		}
 		klog.Infof("Successfully updated the volumegroup %s/%s with pvc %s", volumeGroupNamespace, volumeGroupName, pvc.Name)
+		_, err = ctrl.storeVolumeGroupUpdate(updatedVg)
+		if err != nil {
+			klog.Warningf("failed to store the updated volumegroup %s update. err: %+v", utils.VolumeGroupKey(updatedVg), err)
+		}
 	} else {
 		klog.Infof("storage.k8s.io/volumegroup annotation not found on pvc %s/%s", pvc.Namespace, pvc.Name)
 	}
@@ -86,9 +90,13 @@ func (ctrl *csiVolumeGroupSideCarController) syncVolumeGroupContent(volumeGroupC
 		}
 		volumeGroupContentClone := volumeGroupContentObj.DeepCopy()
 		volumeGroupContentClone.Status = volumeGroupContentStatus
-		_, err = ctrl.clientset.VolumegroupV1alpha1().VolumeGroupContents().UpdateStatus(context.TODO(), volumeGroupContentClone, metav1.UpdateOptions{})
+		updatedVolGroupContent, err := ctrl.clientset.VolumegroupV1alpha1().VolumeGroupContents().UpdateStatus(context.TODO(), volumeGroupContentClone, metav1.UpdateOptions{})
 		if err != nil {
 			return fmt.Errorf("error update volumegroupcontent status %s from api server: %v", boundVolumeGroupContent, err)
+		}
+		_ , err = ctrl.storeVolumeGroupClassUpdate(updatedVolGroupContent)
+		if err != nil {
+			klog.Warningf("failed to store the updated volumegroupcontent %s, err: %+v", updatedVolGroupContent.Name, err)
 		}
 		// explicitly sync the volumegroup
 		volumeGroupNamespace:= volumeGroupContentObj.Spec.VolumeGroupRef.Namespace
@@ -206,6 +214,10 @@ func (ctrl *csiVolumeGroupSideCarController) updateVolumeGroupStatus(volumeGroup
 		if err != nil {
 			return nil, err
 		}
+		_, err = ctrl.storeVolumeGroupUpdate(newVolGroupObj)
+		if err != nil {
+			klog.Warningf("failed to store the updated volumegroup %s update. err: %+v", utils.VolumeGroupKey(newVolGroupObj), err)
+		}
 		return newVolGroupObj, nil
 	}
 	return volumeGroupObj, nil
@@ -261,13 +273,17 @@ func (ctrl *csiVolumeGroupSideCarController) syncReadyVolumeGroup(volumeGroup *v
 			klog.Infof("No new PVs need to be updated on the volumegroupcontent %s, not updating status", boundVolumeGroupContent)
 			return nil
 		}
-		pvList = append(pvList, diffPvList...)
+		pvList = append(volumeGroupContentStatusObjPvList, diffPvList...)
 		volumeGroupContentStatusObj.PVList = pvList
 		volumeGroupContentClone.Status = volumeGroupContentStatusObj
 		// Update the volumegroupcontent CR
-		_, err = ctrl.clientset.VolumegroupV1alpha1().VolumeGroupContents().UpdateStatus(context.TODO(), volumeGroupContentClone, metav1.UpdateOptions{})
+		updatedVolGroupContent, err := ctrl.clientset.VolumegroupV1alpha1().VolumeGroupContents().UpdateStatus(context.TODO(), volumeGroupContentClone, metav1.UpdateOptions{})
 		if err != nil {
 			return fmt.Errorf("error update volumegroupcontent status %s from api server: %v", boundVolumeGroupContent, err)
+		}
+		_ , err = ctrl.storeVolumeGroupClassUpdate(updatedVolGroupContent)
+		if err != nil {
+			klog.Warningf("failed to store the updated volumegroupcontent %s, err: %+v", updatedVolGroupContent.Name, err)
 		}
 	}
 	return nil
@@ -327,72 +343,64 @@ func (ctrl *csiVolumeGroupSideCarController) createVolumeGroupContent(volumeGrou
 }
 
 func (ctrl *csiVolumeGroupSideCarController) deleteVolumeGroupContent(volumeGroupContent *v1alpha1.VolumeGroupContent) {
-	_ = ctrl.volumeGroupContentStore.Delete(volumeGroupContent)
-	klog.V(4).Infof("volumegroupcontent %q deleted", volumeGroupContent.Name)
-	volumeGroupRef := volumeGroupContent.Spec.VolumeGroupRef
-	volumeGroupNamespace := volumeGroupRef.Namespace
-	volumeGroupName := volumeGroupRef.Name
-	// Update the VolumeGroupSpec to the bound content name
-	volumeGroupObj, err := ctrl.clientset.VolumegroupV1alpha1().VolumeGroups(volumeGroupNamespace).Get(context.TODO(), volumeGroupName, metav1.GetOptions{})
-	if err != nil {
-		klog.Errorf("failed to get the volumegroup while deleting volumegroupcontent")
-		return
-	}
-	if volumeGroupContent.Status == nil {
-		return
-	}
-	pvcList := volumeGroupObj.Status.PVCList
-	for _, pvc := range pvcList {
-		pvcName := pvc.Name
-		pvcNamespace := pvc.Namespace
-		err := ctrl.client.CoreV1().PersistentVolumeClaims(pvcNamespace).Delete(context.TODO(), pvcName, metav1.DeleteOptions{})
-		if err != nil {
-			klog.Errorf("error while deleteing pvc %s/%s err: %+v", pvcNamespace, pvcName, err)
+	klog.V(4).Infof("volumegroupcontent %q attempting to delete..", volumeGroupContent.Name)
+	klog.V(4).Infof("volumegroupcontent %q , will attempt to delete associated pvc", volumeGroupContent.Name)
+
+	var deletedPvc map[string]string
+	if volumeGroupContent.Status != nil {
+		pvList := volumeGroupContent.Status.PVList
+		for _, pv := range pvList {
+			pvcRef := pv.Spec.ClaimRef
+			if pvcRef != nil {
+				pvcName := pvcRef.Name
+				pvcNamespace := pvcRef.Namespace
+				_, ok := deletedPvc[pvcName]
+				if ok {
+					klog.Infof("the pvc %s/%s was already deleted, skipping", pvcNamespace, pvcName)
+					continue
+				}
+				err := ctrl.client.CoreV1().PersistentVolumeClaims(pvcNamespace).Delete(context.TODO(), pvcName, metav1.DeleteOptions{})
+				if err != nil {
+					klog.Errorf("error while deleteing pvc %s/%s err: %+v", pvcNamespace, pvcName, err)
+				}
+				klog.Infof("Deleted PVC %s/%s due to volumegroupcontent delete", pvcNamespace, pvcName)
+				deletedPvc[pvcName]=""
+			}
 		}
+	} else {
+		klog.Infof("The volumegroupcontent status is nil : %+v", volumeGroupContent)
 	}
+	_ = ctrl.volumeGroupContentStore.Delete(volumeGroupContent)
+	klog.V(4).Infof("volumegroupcontent %q attempting to deleted", volumeGroupContent.Name)
 }
 
 func (ctrl *csiVolumeGroupSideCarController) deleteVolumeGroup(volumeGroup *v1alpha1.VolumeGroup) {
+	klog.V(5).Infof("deleteVolumeGroup VolumeGroup[%s]: %s", utils.VolumeGroupKey(volumeGroup),
+		utils.GetVolumeGroupStatusForLogging(volumeGroup))
+	volumeGroupContentName := utils.GetDynamicVolumeGroupContentNameForVolumeGroup(volumeGroup)
+	klog.Infof("volumegroup %s is associated with volumegroupcontent %s",
+		utils.VolumeGroupKey(volumeGroup), volumeGroupContentName)
+
 	_ = ctrl.volumeGroupStore.Delete(volumeGroup)
 	klog.V(4).Infof("volumegroup %q deleted", utils.VolumeGroupKey(volumeGroup))
-	volumeGroupContentName := ""
-	if volumeGroup.Status != nil && volumeGroup.Spec.VolumeGroupContentName != nil {
-		volumeGroupContentName = *volumeGroup.Spec.VolumeGroupContentName
+
+	klog.V(5).Infof("deleteVolumeGroup: set DeletionTimeStamp on volumegroupcontent [%s].", volumeGroupContentName)
+	err := ctrl.clientset.VolumegroupV1alpha1().VolumeGroupContents().Delete(context.TODO(), volumeGroupContentName, metav1.DeleteOptions{})
+	if err != nil {
+		klog.Errorf("failed to delete VolumeGroupContent %s from API server: %q", volumeGroupContentName, err)
 	}
-	if volumeGroupContentName == "" {
-		klog.V(5).Infof("deleteVolumeGroup[%q]: content not bound", utils.VolumeGroupKey(volumeGroup))
-		return
-	}
-	klog.V(5).Infof("deleteVolumeGroup[%q]: scheduling sync of volumeGroupContent %s", utils.VolumeGroupKey(volumeGroup), volumeGroupContentName)
-	ctrl.volumeGroupContentQueue.Add(volumeGroupContentName)
 }
 
 func (ctrl *csiVolumeGroupSideCarController) processVolumeGroupWithDeletionTimestamp(volumeGroup *v1alpha1.VolumeGroup) error {
-	klog.V(5).Infof("synchronizing VolumeGroup[%s]: %s", utils.VolumeGroupKey(volumeGroup),
+	klog.V(5).Infof("processVolumeGroupWithDeletionTimestamp VolumeGroup[%s]: %s", utils.VolumeGroupKey(volumeGroup),
 		utils.GetVolumeGroupStatusForLogging(volumeGroup))
-
-	volumeGroupContentName := ""
-	if volumeGroup.Status != nil && volumeGroup.Spec.VolumeGroupContentName != nil {
-		volumeGroupContentName = *volumeGroup.Spec.VolumeGroupContentName
-	}
-	if volumeGroupContentName == "" && len(volumeGroup.Status.PVCList) != 0 {
-		volumeGroupContentName = utils.GetDynamicVolumeGroupContentNameForVolumeGroup(volumeGroup)
-	}
-
-	volumeGroupContent, err := ctrl.getVolumeGroupContentFromStore(volumeGroupContentName)
-	if err != nil {
-		return err
-	}
-	klog.V(5).Infof("processVolumeGroupWithDeletionTimestamp: set DeletionTimeStamp on volumegroupcontent [%s].", volumeGroupContent.Name)
-	err = ctrl.clientset.VolumegroupV1alpha1().VolumeGroupContents().Delete(context.TODO(), volumeGroupContent.Name, metav1.DeleteOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to delete VolumeGroupContent %s from API server: %q", volumeGroupContent.Name, err)
-	}
+	ctrl.deleteVolumeGroup(volumeGroup)
 	return nil
 }
 
 func (ctrl *csiVolumeGroupSideCarController) processVolumeGroupContentWithDeletionTimestamp(volumeGroupContent *v1alpha1.VolumeGroupContent) error {
-	// TODO: retrieve the pv list, call delete volume sequentially
+	klog.V(5).Infof("processVolumeGroupContentWithDeletionTimestamp VolumeGroupContent %s", volumeGroupContent.Name)
+	ctrl.deleteVolumeGroupContent(volumeGroupContent)
 	return nil
 }
 
